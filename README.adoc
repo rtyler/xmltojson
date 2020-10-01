@@ -1,0 +1,7 @@
+= xml-to-json
+
+A Rust crate implementing
+link:https://goessner.net/download/prj/jsonxml/[Stefan Goessner's xml2json]
+design.
+
+See the tests in `src/lib.rs` for examples of how XML gets converted to JSON structures
