@@ -69,11 +69,22 @@ fn read<'a>(mut reader: &mut Reader<&'a [u8]>) -> Value {
                     }
                     else {
                         if node.contains_key(&name) {
-                            debug!("Node contains {} already, need to convert to array", name);
-                            let (_, existing) = node.remove_entry(&name).unwrap();
-                            let entry = vec![existing, child];
-                            // TODO this won't work for N+2 children
-                            node.insert(name, Value::Array(entry));
+                            debug!("Node contains `{}` already, need to convert to array", name);
+                            let (_, mut existing) = node.remove_entry(&name).unwrap();
+                            let mut entries: Vec<Value> = vec![];
+
+                            if existing.is_array() {
+                                let existing = existing.as_array_mut().unwrap();
+                                while existing.len() > 0 {
+                                    entries.push(existing.remove(0));
+                                }
+                            }
+                            else {
+                                entries.push(existing);
+                            }
+                            entries.push(child);
+
+                            node.insert(name, Value::Array(entries));
                         }
                         else {
                             node.insert(name, child);
@@ -211,6 +222,21 @@ mod tests {
             to_json(r#"<e><a>text</a><a>text</a></e>"#)
         );
     }
+
+    #[test]
+    fn node_with_N_identical_children() {
+        json_eq(
+            json!({
+                "e":{"a":[
+                    "text1",
+                    "text2",
+                    "text3"
+                    ]}
+                }),
+            to_json(r#"<e><a>text1</a><a>text2</a><a>text3</a></e>"#)
+        );
+    }
+
 
     #[test]
     fn node_with_text_and_child() {
