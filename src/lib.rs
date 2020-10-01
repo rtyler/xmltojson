@@ -17,20 +17,19 @@ pub struct Error {
 }
 
 
-fn read<'a>(mut reader: &mut Reader<&'a [u8]>) -> Value {
+fn read<'a>(mut reader: &mut Reader<&'a [u8]>, depth: u64) -> Value {
     let mut buf = Vec::new();
     let mut values = Vec::new();
     let mut node = Map::new();
+    debug!("Parsing at depth: {}", depth);
 
     loop {
         match reader.read_event(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                let mut attrs = Map::new();
-
                 if let Ok(name) = String::from_utf8(e.name().to_vec()) {
-                    let mut child = read(&mut reader);
+                    let mut child = read(&mut reader, depth + 1);
+                    let mut attrs = Map::new();
                     debug!("{} children: {:?}", name, child);
-                    let mut has_attrs = false;
 
                     e.attributes().map(|a| {
                         if let Ok(attr) = a {
@@ -48,7 +47,6 @@ fn read<'a>(mut reader: &mut Reader<&'a [u8]>) -> Value {
                                     child.as_object_mut().unwrap().insert(key, value);
                                 }
                                 else {
-                                    has_attrs = true;
                                     attrs.insert(key, value);
                                 }
                             }
@@ -91,18 +89,13 @@ fn read<'a>(mut reader: &mut Reader<&'a [u8]>) -> Value {
                         }
                     }
                 }
-
-                if let Ok(node_value) = serde_json::to_value(&node) {
-                    debug!("pushing node_value: {:?}", node_value);
-                    values.push(node_value);
-                }
             },
-            Ok(Event::Text(e)) => {
+            Ok(Event::Text(ref e)) => {
                 if let Ok(decoded) = e.unescape_and_decode(&reader) {
                     values.push(Value::String(decoded));
                 }
             },
-            Ok(Event::CData(e)) => {
+            Ok(Event::CData(ref e)) => {
                 if let Ok(decoded) = e.unescape_and_decode(&reader) {
                     node.insert("#cdata".to_string(), Value::String(decoded));
                 }
@@ -152,7 +145,7 @@ pub fn to_json(xml: &str) -> Result<Value, Error> {
     reader.expand_empty_elements(true);
     reader.trim_text(true);
 
-    Ok(read(&mut reader))
+    Ok(read(&mut reader, 0))
 }
 
 #[cfg(test)]
