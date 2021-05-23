@@ -2,6 +2,7 @@
 
 A Rust crate implementing
 link:https://goessner.net/download/prj/jsonxml/[Stefan Goessner's xml2json]
-design.
+design. This can be very useful for turning XML data into JSON for processing in JSON data stores or engines such as Elasticsearch or PostgreSQL ()`JSON`/`JSONB`).
 
 See the tests in `src/lib.rs` for examples of how XML gets converted to JSON structures
+
