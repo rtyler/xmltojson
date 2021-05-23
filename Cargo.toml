@@ -1,6 +1,6 @@
 [package]
 name = "xmltojson"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["R. Tyler Croy <rtyler@brokenco.de>"]
 edition = "2018"
 description = "A simple crate for converting XML to JSON"
@@ -8,6 +8,7 @@ homepage = "https://github.com/rtyler/xmltojson"
 repository = "https://github.com/rtyler/xmltojson"
 license = "LGPL-3.0+"
 keywords = ["xml", "json"]
+readme = "README.md"
 
 [dependencies]
 log = "0"
