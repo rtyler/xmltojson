@@ -1,6 +1,6 @@
 [package]
 name = "xmltojson"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["R. Tyler Croy <rtyler@brokenco.de>"]
 edition = "2018"
 description = "A simple crate for converting XML to JSON"
@@ -11,7 +11,7 @@ keywords = ["xml", "json"]
 readme = "README.md"
 
 [dependencies]
-log = "0"
+log = "0.4"
 serde = { version = "1", features = ["rc"] }
 serde_json = "1"
 quick-xml = { version = "0.19", features = ["serde"] }
