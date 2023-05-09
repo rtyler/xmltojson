@@ -22,9 +22,9 @@ fn read(mut reader: &mut Reader<&[u8]>, depth: u64) -> Value {
     debug!("Parsing at depth: {}", depth);
 
     loop {
-        match reader.read_event(&mut buf) {
+        match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                if let Ok(name) = String::from_utf8(e.name().to_vec()) {
+                if let Ok(name) = String::from_utf8(e.name().into_inner().to_vec()) {
                     let mut child = read(&mut reader, depth + 1);
                     let mut attrs = Map::new();
                     debug!("{} children: {:?}", name, child);
@@ -33,7 +33,7 @@ fn read(mut reader: &mut Reader<&[u8]>, depth: u64) -> Value {
                         .attributes()
                         .map(|a| {
                             if let Ok(attr) = a {
-                                let key = String::from_utf8(attr.key.to_vec());
+                                let key = String::from_utf8(attr.key.into_inner().to_vec());
                                 let value = String::from_utf8(attr.value.to_vec());
 
                                 // Only bother adding the attribute if both key and value are valid utf8
@@ -86,13 +86,15 @@ fn read(mut reader: &mut Reader<&[u8]>, depth: u64) -> Value {
                 }
             }
             Ok(Event::Text(ref e)) => {
-                if let Ok(decoded) = e.unescape_and_decode(&reader) {
-                    values.push(Value::String(decoded));
+                if let Ok(decoded) = e.unescape() {
+                    values.push(Value::String(decoded.to_string()));
                 }
             }
             Ok(Event::CData(ref e)) => {
-                if let Ok(decoded) = e.unescape_and_decode(&reader) {
-                    node.insert("#cdata".to_string(), Value::String(decoded));
+                if let Ok(decoded) = e.clone().escape() {
+                    if let Ok(decoded_bt) = decoded.unescape() {
+                        node.insert("#cdata".to_string(), Value::String(decoded_bt.to_string()));
+                    }
                 }
             }
             Ok(Event::End(ref _e)) => break,
