@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 #[derive(Debug)]
 pub struct Error {}
 
-fn read(mut reader: &mut Reader<&[u8]>, depth: u64) -> Value {
+fn read(reader: &mut Reader<&[u8]>, depth: u64) -> Value {
     let mut buf = Vec::new();
     let mut values = Vec::new();
     let mut node = Map::new();
@@ -25,7 +25,7 @@ fn read(mut reader: &mut Reader<&[u8]>, depth: u64) -> Value {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
                 if let Ok(name) = String::from_utf8(e.name().into_inner().to_vec()) {
-                    let mut child = read(&mut reader, depth + 1);
+                    let mut child = read(reader, depth + 1);
                     let mut attrs = Map::new();
                     debug!("{} children: {:?}", name, child);
 
