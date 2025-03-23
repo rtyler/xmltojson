@@ -137,8 +137,9 @@ fn read(reader: &mut Reader<&[u8]>, depth: u64) -> Value {
  */
 pub fn to_json(xml: &str) -> Result<Value, Error> {
     let mut reader = Reader::from_str(xml);
-    reader.expand_empty_elements(true);
-    reader.trim_text(true);
+    let config = reader.config_mut();
+    config.expand_empty_elements = true;
+    config.trim_text(true);
 
     Ok(read(&mut reader, 0))
 }
