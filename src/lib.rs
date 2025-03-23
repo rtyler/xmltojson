@@ -11,11 +11,12 @@ use log::*;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde_json::{Map, Value};
+use std::io::BufRead;
 
 #[derive(Debug)]
 pub struct Error {}
 
-fn read(reader: &mut Reader<&[u8]>, depth: u64) -> Value {
+pub fn read<R: BufRead>(reader: &mut Reader<R>, depth: u64) -> Value {
     let mut buf = Vec::new();
     let mut values = Vec::new();
     let mut node = Map::new();
