@@ -10,16 +10,127 @@ extern crate serde_json;
 use log::*;
 use quick_xml::events::Event;
 use quick_xml::Reader;
-use serde_json::{Map, Value};
+use serde_json::{to_value, Map, Value};
 use std::io::BufRead;
+use std::mem::take;
 
 #[derive(Debug)]
 pub struct Error {}
 
+trait AttrMap {
+    fn insert_text(&mut self, value: &Value) -> Option<Value>;
+    fn insert_text_node(&mut self, value: Value);
+}
+
+impl AttrMap for Map<String, Value> {
+    fn insert_text(&mut self, value: &Value) -> Option<Value> {
+        if !self.is_empty() {
+            if value.is_string() {
+                self.insert_text_node(value.clone());
+            }
+            if let Ok(attrs) = to_value(take(self)) {
+                return Some(attrs);
+            }
+        }
+        None
+    }
+
+    fn insert_text_node(&mut self, value: Value) {
+        self.insert("#text".to_string(), value);
+    }
+}
+
+struct NodeValues {
+    node: Map<String, Value>,
+    nodes: Vec<Map<String, Value>>,
+    nodes_are_map: Vec<bool>,
+    values: Vec<Value>,
+}
+
+impl NodeValues {
+    fn new() -> Self {
+        Self {
+            values: Vec::new(),
+            node: Map::new(),
+            nodes: Vec::new(),
+            nodes_are_map: Vec::new(),
+        }
+    }
+
+    fn insert(&mut self, key: String, value: Value) {
+        self.node.insert(key, value);
+    }
+
+    fn insert_cdata(&mut self, value: &str) {
+        let key = "#cdata".to_string();
+        let new_value = match self.node.get(&key) {
+            Some(existing) => {
+                let mut old_value = existing.as_str().unwrap().to_string();
+                old_value.push_str(value);
+                old_value
+            }
+            None => value.to_string(),
+        };
+        self.node.insert(key, Value::String(new_value));
+    }
+
+    fn insert_text(&mut self, text: &str) {
+        if !self.node.is_empty() {
+            self.nodes.push(take(&mut self.node));
+            self.nodes_are_map.push(true);
+        }
+
+        self.values.push(Value::String(text.to_string()));
+        self.nodes_are_map.push(false);
+    }
+
+    fn remove_entry(&mut self, key: &String) -> Option<Value> {
+        if self.node.contains_key(key) {
+            debug!("Node contains `{}` already, need to convert to array", key);
+            if let Some((_, existing)) = self.node.remove_entry(key) {
+                return Some(existing);
+            }
+        }
+        None
+    }
+
+    fn get_value(&mut self) -> Value {
+        debug!("values to return: {:?}", self.values);
+        if !self.node.is_empty() {
+            self.nodes.push(take(&mut self.node));
+            self.nodes_are_map.push(true);
+        }
+
+        if !self.nodes.is_empty() {
+            // If we had collected some text along the way, that needs to be inserted
+            // so we don't lose it
+
+            if self.nodes.len() == 1 && self.values.len() <= 1 {
+                if self.values.len() == 1 {
+                    self.nodes[0].insert_text_node(self.values.remove(0));
+                }
+                debug!("returning node instead: {:?}", self.nodes[0]);
+                return to_value(&self.nodes[0]).expect("Failed to #to_value() a node!");
+            }
+            for (index, node_is_map) in self.nodes_are_map.iter().enumerate() {
+                if *node_is_map {
+                    self.values
+                        .insert(index, Value::Object(self.nodes.remove(0)));
+                }
+            }
+        }
+
+        match self.values.len() {
+            0 => Value::Null,
+            1 => self.values.pop().unwrap(),
+            _ => Value::Array(take(&mut self.values)),
+        }
+    }
+}
+
 pub fn read<R: BufRead>(reader: &mut Reader<R>, depth: u64) -> Value {
     let mut buf = Vec::new();
-    let mut values = Vec::new();
-    let mut node = Map::new();
+    let mut nodes = NodeValues::new();
     debug!("Parsing at depth: {}", depth);
 
     loop {
@@ -54,20 +165,7 @@ pub fn read<R: BufRead>(reader: &mut Reader<R>, depth: u64) -> Value {
                         })
                         .collect::<Vec<_>>();
 
-                    /*
-                     * nodes with attributes need to be handled special
-                     */
-                    if !attrs.is_empty() {
-                        if child.is_string() {
-                            attrs.insert("#text".to_string(), child);
-                        }
-
-                        if let Ok(attrs) = serde_json::to_value(attrs) {
-                            node.insert(name, attrs);
-                        }
-                    } else if node.contains_key(&name) {
-                        debug!("Node contains `{}` already, need to convert to array", name);
-                        let (_, mut existing) = node.remove_entry(&name).unwrap();
+                    if let Some(mut existing) = nodes.remove_entry(&name) {
                         let mut entries: Vec<Value> = vec![];
 
                         if existing.is_array() {
@@ -78,23 +176,36 @@ pub fn read<R: BufRead>(reader: &mut Reader<R>, depth: u64) -> Value {
                         } else {
                             entries.push(existing);
                         }
-                        entries.push(child);
 
-                        node.insert(name, Value::Array(entries));
+                        /*
+                         * nodes with attributes need to be handled special
+                         */
+                        if let Some(attrs) = attrs.insert_text(&child) {
+                            entries.push(attrs);
+                        } else {
+                            entries.push(child);
+                        }
+
+                        nodes.insert(name, Value::Array(entries));
+                    /*
+                     * nodes with attributes need to be handled special
+                     */
+                    } else if let Some(attrs) = attrs.insert_text(&child) {
+                        nodes.insert(name, attrs);
                     } else {
-                        node.insert(name, child);
+                        nodes.insert(name, child);
                     }
                 }
             }
             Ok(Event::Text(ref e)) => {
                 if let Ok(decoded) = e.unescape() {
-                    values.push(Value::String(decoded.to_string()));
+                    nodes.insert_text(&decoded);
                 }
             }
             Ok(Event::CData(ref e)) => {
                 if let Ok(decoded) = e.clone().escape() {
                     if let Ok(decoded_bt) = decoded.unescape() {
-                        node.insert("#cdata".to_string(), Value::String(decoded_bt.to_string()));
+                        nodes.insert_cdata(&decoded_bt);
                     }
                 }
             }
@@ -103,33 +214,7 @@ pub fn read<R: BufRead>(reader: &mut Reader<R>, depth: u64) -> Value {
             _ => (),
         }
     }
-
-    debug!("values to return: {:?}", values);
-    if !node.is_empty() {
-        // If we had collected some text along the way, that needs to be inserted
-        // so we don't lose it
-        let mut index = 0;
-        let mut has_text = false;
-        for value in values.iter() {
-            if value.is_string() {
-                has_text = true;
-                break;
-            }
-            index += 1;
-        }
-
-        if has_text {
-            node.insert("#text".to_string(), values.remove(index));
-        }
-        debug!("returning node instead: {:?}", node);
-        return serde_json::to_value(&node).expect("Failed to #to_value() a node!");
-    }
-
-    match values.len() {
-        0 => Value::Null,
-        1 => values.pop().unwrap(),
-        _ => Value::Array(values),
-    }
+    nodes.get_value()
 }
 
 /**
@@ -268,8 +353,8 @@ mod tests {
                 "a":{
                     "@id":"a",
                     "b":{
-                    "@id":"b",
-                    "#text":"hey!"
+                        "@id":"b",
+                        "#text":"hey!"
                     }
                 }
             }),
@@ -278,16 +363,14 @@ mod tests {
     }
 
     #[test]
-    fn node_with_nested_test() {
-        /*
-        todo!("this syntax makes no sense to me");
-        json_eq(json!(
+    fn node_with_nested_text() {
+        json_eq(
+            json!(
             {
-                "a":"x<c/>y"
+                "a":["x",{"c":null},"y"]
             }),
-            to_json(r#"<a>x<c/>y</a>"#)
+            to_json(r#"<a>x<c/>y</a>"#),
         );
-        */
     }
 
     #[test]
@@ -385,15 +468,13 @@ mod tests {
 
     #[test]
     fn node_with_cdata_inside_text() {
-        /*
-         * TODO
-        json_eq(json!(
+        json_eq(
+            json!(
             {
-            "e":"\n  some text\n  <![CDATA[ .. some data .. ]]>\n  more text\n"
+            "e":["some text",{"#cdata":" .. some data .. "}, "more text"]
             }),
-            to_json(r#"<e>  some text  <![CDATA[ .. some data .. ]]>  more text</e>"#)
+            to_json(r#"<e>  some text  <![CDATA[ .. some data .. ]]>  more text</e>"#),
         );
-        */
     }
 
     #[test]
@@ -413,15 +494,62 @@ mod tests {
 
     #[test]
     fn node_with_duplicate_cdata() {
-        /*
-         * TODO: unsure about this approach to handling cdata
-        json_eq(json!(
+        json_eq(
+            json!(
             {
-            "e":"<![CDATA[ .. some data .. ]]><![CDATA[ .. more data .. ]]>"
+            "e":{
+                "#cdata":" .. some data ..  .. more data .. ",
             }
-            ),
-            to_json(r#"<e><![CDATA[ .. some data .. ]]><![CDATA[ .. more data .. ]]></e>"#)
+            }),
+            to_json(r#"<e><![CDATA[ .. some data .. ]]><![CDATA[ .. more data .. ]]></e>"#),
         );
-        */
+    }
+
+    #[test]
+    fn node_empty() {
+        json_eq(json!(null), to_json(""));
+    }
+
+    #[test]
+    fn node_with_duplicate_text() {
+        json_eq(
+            json!({"e": {"a": ["x", "y"]}}),
+            to_json("<e><a>x</a><a>y</a></e>"),
+        );
+    }
+
+    #[test]
+    fn node_with_duplicate_attrs_and_text() {
+        json_eq(
+            json!({"e": {"a": [{"#text": "x", "@u": "x"}, {"#text": "y", "@u": "y"}]}}),
+            to_json(r#"<e><a u="x">x</a><a u="y">y</a></e>"#),
+        );
+    }
+
+    #[test]
+    fn node_with_text_and_siblings() {
+        json_eq(
+            json!({"e":["x", {"a": {"@u": "y"}}, "z"]}),
+            to_json(r#"<e>x <a u="y"/> z</e>"#),
+        );
+    }
+
+    #[test]
+    fn node_with_text_and_siblings_mixed() {
+        json_eq(
+            json!({"e":["a", {"x": "b"}, "c", {"x": "d"}]}),
+            to_json(r#"<e>a <x>b</x> c <x>d</x></e>"#),
+        );
+    }
+
+    #[test]
+    fn node_with_cdata_only() {
+        json_eq(
+            json!(
+            {
+            "#cdata":" .. some data .. "
+            }),
+            to_json(r#"<![CDATA[ .. some data .. ]]>"#),
+        );
     }
 }
