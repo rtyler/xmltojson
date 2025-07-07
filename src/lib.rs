@@ -8,6 +8,7 @@
 extern crate serde_json;
 
 use log::*;
+use quick_xml::escape::resolve_predefined_entity;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde_json::{to_value, Map, Value};
@@ -75,7 +76,20 @@ impl NodeValues {
     }
 
     fn insert_text(&mut self, text: &str) {
-        if !self.node.is_empty() {
+        if self.node.is_empty() {
+            // if directly preceded by another string, append to it
+            if let Some(value) = self.values.pop() {
+                let mut value_text = value.as_str().unwrap_or_default().to_string();
+                value_text.push_str(text);
+                self.values.push(Value::String(value_text));
+                return;
+            }
+        } else {
+            // don't insert whitespace between nodes
+            if text.trim().is_empty() {
+                return;
+            }
+
             self.nodes.push(take(&mut self.node));
             self.nodes_are_map.push(true);
         }
@@ -102,12 +116,16 @@ impl NodeValues {
         }
 
         if !self.nodes.is_empty() {
-            // If we had collected some text along the way, that needs to be inserted
-            // so we don't lose it
+            // If we had collected some non-whitespace text along the way, that
+            // needs to be inserted so we don't lose it
 
             if self.nodes.len() == 1 && self.values.len() <= 1 {
                 if self.values.len() == 1 {
-                    self.nodes[0].insert_text_node(self.values.remove(0));
+                    let value = self.values.remove(0);
+                    let text = value.as_str().unwrap_or_default().trim();
+                    if !text.is_empty() {
+                        self.nodes[0].insert_text_node(Value::String(text.to_string()));
+                    }
                 }
                 debug!("returning node instead: {:?}", self.nodes[0]);
                 return to_value(&self.nodes[0]).expect("Failed to #to_value() a node!");
@@ -119,6 +137,23 @@ impl NodeValues {
                 }
             }
         }
+
+        // trim any values left, removing empty strings
+        self.values = self
+            .values
+            .clone()
+            .into_iter()
+            .filter_map(|value| {
+                if value.is_string() {
+                    let trimmed = value.as_str().unwrap_or_default().trim();
+                    if trimmed.is_empty() {
+                        return None;
+                    }
+                    return Some(Value::String(trimmed.to_string()));
+                }
+                Some(value)
+            })
+            .collect();
 
         match self.values.len() {
             0 => Value::Null,
@@ -198,14 +233,21 @@ pub fn read<R: BufRead>(reader: &mut Reader<R>, depth: u64) -> Value {
                 }
             }
             Ok(Event::Text(ref e)) => {
-                if let Ok(decoded) = e.unescape() {
+                if let Ok(decoded) = e.decode() {
                     nodes.insert_text(&decoded);
                 }
             }
             Ok(Event::CData(ref e)) => {
-                if let Ok(decoded) = e.clone().escape() {
-                    if let Ok(decoded_bt) = decoded.unescape() {
-                        nodes.insert_cdata(&decoded_bt);
+                if let Ok(decoded) = e.decode() {
+                    nodes.insert_cdata(&decoded);
+                }
+            }
+            Ok(Event::GeneralRef(ref e)) => {
+                if let Ok(Some(ch)) = e.resolve_char_ref() {
+                    nodes.insert_text(&ch.to_string());
+                } else if let Ok(decoded) = e.decode() {
+                    if let Some(entity) = resolve_predefined_entity(&decoded) {
+                        nodes.insert_text(entity);
                     }
                 }
             }
@@ -225,7 +267,7 @@ pub fn to_json(xml: &str) -> Result<Value, Error> {
     let mut reader = Reader::from_str(xml);
     let config = reader.config_mut();
     config.expand_empty_elements = true;
-    config.trim_text(true);
+    // when trimming at the config level, we'd loose spaces between escaped entities
 
     Ok(read(&mut reader, 0))
 }
@@ -550,6 +592,14 @@ mod tests {
             "#cdata":" .. some data .. "
             }),
             to_json(r#"<![CDATA[ .. some data .. ]]>"#),
+        );
+    }
+
+    #[test]
+    fn node_with_entities() {
+        json_eq(
+            json!({"pets": "A cat & a dog"}),
+            to_json(r#"<pets>A cat &amp; a dog</pets>"#),
         );
     }
 }
